@@ -194,8 +194,15 @@ class GroupedQueryAttention(nn.Module):
             if self.use_cache: _k, _v = self.update_kv_cache(batch_size=c_batch_size, start_pos=start_pos, context_len=c_context_len, keys=keys, values=v, device=x.device)
         
         if self.use_flash:
-            output = F.scaled_dot_product_attention(queries, keys, v, is_causal=True, enable_gqa=True)
-            
+            # torch 2.2.0's scaled_dot_product_attention has no enable_gqa kwarg (added in a later
+            # PyTorch release) -- manually expand K/V heads to match Q instead, same effect.
+            # keys/v are already (batch, num_kv_heads, seq_len, head_dim) here (post-transpose),
+            # so repeat_kv (which expects pre-transpose layout) doesn't apply -- use repeat_interleave
+            # on the heads dim directly instead.
+            flash_keys = torch.repeat_interleave(keys, self.num_rep, dim=1)
+            flash_values = torch.repeat_interleave(v, self.num_rep, dim=1)
+            output = F.scaled_dot_product_attention(queries, flash_keys, flash_values, is_causal=True)
+
         else: # Calculate Grouped Query Attention manually
             keys = repeat_kv(keys, self.num_rep)
             values = repeat_kv(v, self.num_rep)
@@ -361,8 +368,8 @@ class Block(nn.Module):
             self.ffn = FeedForward(config)
 
 
-        self.norm_attention = torch.nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) # you also can use RMSNorm(config)
-        self.norm_ffn = torch.nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) # you also can use RMSNorm(config)
+        self.norm_attention = RMSNorm(config) # you also can use RMSNorm(config)
+        self.norm_ffn = RMSNorm(config) # you also can use RMSNorm(config)
 
     def forward(self, x, cos, sin, start_pos):
         x = x + self.attention(
@@ -407,7 +414,7 @@ class Transformer(nn.Module, PyTorchModelHubMixin): # extending PyTorchModelHubM
         for _ in range(self.num_layers):
             self.blocks.append(Block(config))
 
-        self.norm = torch.nn.modules.normalization.RMSNorm(config.num_dims, config.rmsnorm_eps) # you also can use RMSNorm(config)
+        self.norm = RMSNorm(config) # you also can use RMSNorm(config)
         self.ll_head = nn.Linear(self.num_dims, self.vocab_size, bias=False)
         
 

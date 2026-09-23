@@ -22,16 +22,16 @@ train_config = TrainerConfig(
     num_epochs = 1,
 
     use_ddp = False,
-    use_moe = False,
-    use_lossfreebalance = False,
+    use_moe = True,
+    use_lossfreebalance = True,
     clean_cuda_cache = True,
     use_compile = True,
     use_dtype = "bfloat16",
 
     seed = 1338,
-    max_seq_len = 1536, # 1536
-    batch_size = 16, # 16,
-    accumulation_steps = int(2**19//(1536 * 32)),
+    max_seq_len = 1024, # matches the published "MoE 2+1" context_len
+    batch_size = 32, # 128 hit CUDA OOM (used ~79GB alone); 64 should fit comfortably
+    accumulation_steps = 8,
     
     weight_decay = 0.1,
     warmup_ratio = 0.1,
@@ -41,39 +41,39 @@ train_config = TrainerConfig(
 
     val_ratio = 0.005,
     steps_for_eval = 20,
-    eval_interval = 20,
+    eval_interval = 5000,
 
-    checkpoints_frequency = 2000,
+    checkpoints_frequency = 5000,
     path_to_checkpoints = "./model_testing",
 
-    tokenized_dataset_path = "cosmopedia",
+    tokenized_dataset_path = "/fast/ndener/lightlm_workbench/tokenized/cosmopedia",
     eval_log_file = "log/eval_cosmopedia.txt",
 )
 
 config = ModelConfig(
         vocab_size = tokenizer.vocab_size,
 
-        num_dims = 512,
+        num_dims = 384,
         num_heads = 16,
         num_kv_heads = 4,
         num_layers = 32,
-        ffn_hidden_dims = 512 * 4,
+        ffn_hidden_dims = 1024,
 
         rmsnorm_eps = 1e-6,
         rope_theta = 1e5,
-    
-        context_len = 1536,
-        
+
+        context_len = 1024,
+
         use_cache = False,
         use_flash = True,
-        use_moe = False,
+        use_moe = True,
 
         moe_num_experts = 2,
         moe_active_experts = 2,
         moe_eps = 1e-6,
         moe_aux_loss_coef = 0.01,
         moe_shared_experts = 1,
-        use_lossfreebalance = False,
+        use_lossfreebalance = True,
     )
 
 

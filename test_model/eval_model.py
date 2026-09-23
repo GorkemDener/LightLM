@@ -1,4 +1,5 @@
 import re
+import sys
 from tqdm import tqdm
 
 import torch
@@ -15,7 +16,7 @@ tokenizer.pad_token = tokenizer.eos_token
 
 
 def arc(model, save_name, temp=0.25):
-    dataset = load_dataset('ai2_arc', 'ARC-Challenge', split='test')
+    dataset = load_dataset('allenai/ai2_arc', 'ARC-Challenge', split='test')
 
     answer_pattern = re.compile(r'([A-Ea-e])')
     
@@ -74,7 +75,7 @@ def arc(model, save_name, temp=0.25):
 
 
 def wino(model, save_name, temp=0.25):
-    dataset = load_dataset('winogrande', 'winogrande_xl', split='validation')
+    dataset = load_dataset('allenai/winogrande', 'winogrande_xl', split='validation')
 
     answer_pattern = re.compile(r'([A-Ba-b])')
     
@@ -141,4 +142,7 @@ def eval_model(checkpoint_path, temp=0.25, save_name="model"):
     arc(model, f"{save_name}", temp)
     wino(model, f"{save_name}", temp)
 
-eval_model("./model_FFN")
+if __name__ == "__main__":
+    checkpoint_path = sys.argv[1] if len(sys.argv) > 1 else "./model_MoE"
+    save_name = sys.argv[2] if len(sys.argv) > 2 else checkpoint_path
+    eval_model(checkpoint_path, save_name=save_name)

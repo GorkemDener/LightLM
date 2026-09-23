@@ -113,8 +113,8 @@ class DataLoader():
 
     def load_dataset(self, seed: int):
         self.dataset = DatatroveFolderDataset(
-            folder_path=self.config.tokenized_dataset_path,
-            filename_pattern=os.path.join(self.config.tokenized_dataset_path, "**", "*.ds"),
+            data_folder=self.config.tokenized_dataset_path,
+            filename_pattern="**/*.ds",
             seq_len=self.config.max_seq_len,
             token_size=self.token_size,
             recursive=True,
@@ -130,6 +130,7 @@ class Trainer():
     def __init__(self, config, model, tokenizer):
         self.config = config
         self.model = model
+        self.raw_m = model # unwrapped model -- torch.compile()/DDP wrappers don't forward .blocks
         self.num_epochs = config.num_epochs
 
         self.use_moe = config.use_moe
@@ -163,7 +164,6 @@ class Trainer():
             self.model.to(self.device)
             
             self.model = DDP(self.model, device_ids=[self.ddp_local_rank])
-            self.raw_m = model
         else:
             self.ddp = False
             self.ddp_rank = 0
@@ -180,10 +180,10 @@ class Trainer():
             print(f"use {'torch.compile()'}: {use_compile}")
             print(f"Use MoE: {'Yes ' if self.use_moe else 'No'}")
             if self.use_moe:
-                print(f"Number of experts: {self.model.blocks[0].ffn.num_experts}")
-                print(f"Number of used experts during inference: {self.model.blocks[0].ffn.moe_routed_experts}")
+                print(f"Number of experts: {self.raw_m.blocks[0].ffn.num_experts}")
+                print(f"Number of used experts during inference: {self.raw_m.blocks[0].ffn.moe_active_experts}")
                 print(f"Method of aux_loss: {'loss-free-balance' if config.use_lossfreebalance else 'default'}")
-                print(f"Number of parameters will be used during inference: {((sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) - sum(p.numel() for p in self.model.blocks[0].ffn.parameters()) * len(self.model.blocks) * (1-(self.model.blocks[0].ffn.moe_routed_experts + self.model.blocks[0].ffn.moe_shared_experts) / (self.model.blocks[0].ffn.num_experts + self.model.blocks[0].ffn.moe_shared_experts)))) / 1e6:.2f}M")
+                print(f"Number of parameters will be used during inference: {((sum([p.data.numel() for p in self.model.parameters() if p.requires_grad]) - sum(p.numel() for p in self.raw_m.blocks[0].ffn.parameters()) * len(self.raw_m.blocks) * (1-(self.raw_m.blocks[0].ffn.moe_active_experts + self.raw_m.blocks[0].ffn.moe_shared_experts) / (self.raw_m.blocks[0].ffn.num_experts + self.raw_m.blocks[0].ffn.moe_shared_experts)))) / 1e6:.2f}M")
     
     def step(self, data_loader, accumulation_steps: int,
               num_tokens: int, split: str = "train"):
@@ -238,6 +238,9 @@ class Trainer():
         last_step = num_steps_per_epoch - 1
         self.model.train()
 
+        total_dataset_tokens = data_loader.len_dataset * self.config.max_seq_len
+        total_tokens_processed = 0
+
         for epoch in range(self.num_epochs):
             for step in range(num_steps_per_epoch):
                 t0 = time.perf_counter()
@@ -255,12 +258,12 @@ class Trainer():
 
                 # Calculate expert biases using Auxiliary Loss-Free Balance method for MoE (https://arxiv.org/pdf/2408.15664)
                 if self.use_moe and self.use_lossfreebalance: 
-                    for block in range(len(self.model.blocks)):
-                        expert_counts = torch.bincount(ce_loss[1].flatten(), minlength=self.model.blocks[block].ffn.moe_routed_experts)  
+                    for block in range(len(self.raw_m.blocks)):
+                        expert_counts = torch.bincount(ce_loss[1].flatten(), minlength=self.raw_m.blocks[block].ffn.moe_active_experts)
                         avg_count = expert_counts.float().mean()
                         for i, count in enumerate(expert_counts):
                             error = avg_count - count.float()
-                            self.model.blocks[block].ffn.expert_biases.data[i] += self.update_rate * torch.sign(error)
+                            self.raw_m.blocks[block].ffn.expert_biases.data[i] += self.update_rate * torch.sign(error)
 
                 norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0) #ToDO
 
@@ -271,10 +274,12 @@ class Trainer():
                 t1 = time.perf_counter()
 
                 tokens_per_sec = num_tokens / (t1 - t0) * self.ddp_world_size
+                total_tokens_processed += num_tokens * self.ddp_world_size
 
-                # Logging 
+                # Logging
                 if self.master_process:
-                    print(f"Epoch: {epoch} | Step: {step} |  loss: {accumulated_loss:.4f} | norm: {norm:.4f} | lr: {scheduler.get_last_lr()[0]} | tok/s: {tokens_per_sec}")
+                    pct = 100 * total_tokens_processed / total_dataset_tokens
+                    print(f"Epoch: {epoch} | Step: {step} |  loss: {accumulated_loss:.4f} | norm: {norm:.4f} | lr: {scheduler.get_last_lr()[0]} | tok/s: {tokens_per_sec} | tokens: {total_tokens_processed:,} ({pct:.2f}%)")
                 
                 # Evaluation 
                 if self.master_process and ((step>0 and step % self.config.eval_interval == 0) or step == last_step):
@@ -282,7 +287,7 @@ class Trainer():
                     val_loss = self.eval(data_loader)
 
                     with open(self.config.eval_log_file, "a") as f:
-                        f.write(f"Step: {step * (epoch+1)}, val_loss: {val_loss:.4f}, norm: {norm:.4f}, lr: {scheduler.get_last_lr()[0]}, time: {t1 - t0:.2f}s, tok/s: {tokens_per_sec:.1f} \n")
+                        f.write(f"Step: {step * (epoch+1)}, val_loss: {val_loss:.4f}, norm: {norm:.4f}, lr: {scheduler.get_last_lr()[0]}, time: {t1 - t0:.2f}s, tok/s: {tokens_per_sec:.1f}, tokens: {total_tokens_processed:,} ({pct:.2f}%) \n")
 
                     self.model.train()
                     if self.clean_cuda_cache:

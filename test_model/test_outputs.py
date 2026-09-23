@@ -9,7 +9,7 @@ tokenizer_id = "HuggingFaceTB/SmolLM-360M"
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
 tokenizer.pad_token = tokenizer.eos_token
 
-model = Transformer.from_pretrained("./model_FFN").to(device)
+model = Transformer.from_pretrained("./model_MoE").to(device)
 
 input_ids = tokenizer(["I am a language model,"], return_tensors="pt")['input_ids'].to(device)
 idx = model.generate(input_ids, temperature=0.48, top_k=40, max_tokens=30)

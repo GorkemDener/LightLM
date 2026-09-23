@@ -1,0 +1,10 @@
+model: ARC Evaluation Results:
+0.1680887372013652
+model: Wino Evaluation Results:
+0.43172849250197315
+
+model_MoE_10000: ARC Evaluation Results:
+0.22696245733788395
+model_MoE_10000: Wino Evaluation Results:
+0.489344909234412
+

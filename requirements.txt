@@ -1,0 +1,11 @@
+torch==2.2.0
+torchvision==0.17.0
+torchaudio==2.2.0
+transformers
+huggingface_hub
+datatrove[io,processing]
+datasets
+tiktoken
+numpy<2
+matplotlib
+tqdm
